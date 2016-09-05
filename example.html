@@ -1,0 +1,164 @@
+<html>
+<head>
+	<style>
+		.open {
+			position:	fixed;
+			top:		15px;
+			right:		15px;
+		}
+	</style>
+	<title>FAC</title>
+</head>
+<body>
+<div class="open">
+	<button id="open" type="button" disabled>--- OPEN FEEDS ---</button>
+</div>
+<div id="feeds"></div>
+<div style="display: none;">
+	<div id="feed">
+		<div></div>
+		<video width="640" height="480"></video>
+		<div>
+			<button>--- SELECT COLOUR ---</button>
+		</div>
+	</div>
+</div>
+<script language="JavaScript" src="/tracking.js"></script>
+<script language="JavaScript" src="/gate.js"></script>
+<script language="JavaScript" src="https://fac1.ipcortex.net/cinclude/adapter.js"></script>
+<script language="JavaScript" src="https://fac1.ipcortex.net/api/api.js"></script>
+<script language="JavaScript">
+	var TAG = '[FAC]';
+	var gate_b, gate_c;
+	var requestedRoom = {};
+	var openBtn = document.getElementById('open');
+
+	function processGate(detection) {
+		console.log(detection);
+	}
+
+	function processAv(av) {
+		for ( var streamId in av.remoteMedia ) {
+			var media = av.remoteMedia[streamId];
+			var feed = document.getElementById(streamId);
+			switch ( media.status ) {
+				case 'timeout':
+				case 'error':
+				case 'close':
+					if ( feed )
+						feed.remove();
+					break;
+				case 'connected':
+					if ( feed )
+						break;
+					var feed = document.getElementById('feed').cloneNode(true);
+					document.getElementById('feeds').appendChild(feed);
+					feed.querySelector('div').textContent = av.signalling.label;
+					var video = feed.querySelector('video');
+					var gate = new Gate(video,
+						function(detection) {
+							detection.gate = av.signalling.label;
+							processGate(detection);
+						}
+					);
+					feed.querySelector('button').addEventListener('click',
+						function() {
+							var name = window.prompt('Name of detection?');
+							gate.dropper(name);
+						}
+					);
+					attachMediaStream(video, media);
+					feed.id = streamId;
+					video.play();
+					break;
+			}
+		}
+	}
+
+	function processRoom(room) {
+		if ( room.multi || ! requestedRoom[room.chatID] )
+			return;
+		console.log(TAG, 'Requested room created, starting video.');
+		navigator.mediaDevices.getUserMedia({video: true}).then(
+			stream => { room.videoChat(stream).addListener('update', processAv); }
+		).catch(
+			error => { console.log(error); }
+		);
+		delete requestedRoom[room.chatID];
+	}
+
+	openBtn.addEventListener('click',
+		function() {
+			var room = null;
+			if ( gate_b.show === 'online' ) {
+				if ( room = IPCortex.PBX.rooms.find(room => { return ! room.multi && room.chatID == gate_b.cID }) ) {
+					console.log(TAG, 'Room exists for Gate B, starting video.');
+					navigator.mediaDevices.getUserMedia({video: true}).then(
+						stream => { room.videoChat(stream).addListener('update', processAv); }
+					).catch(
+						error => { console.log(error); }
+					);
+				} else {
+					console.log(TAG, 'Requesting room with Gate B.');
+					requestedRoom[gate_b.cID] = true;
+					gate_b.chat();
+				}
+			} else
+				console.log(TAG, 'Gate B offline?');
+			if ( gate_c.show === 'online' ) {
+				if ( room = IPCortex.PBX.rooms.find(room => { return ! room.multi && room.chatID == gate_c.cID }) ) {
+					console.log(TAG, 'Room exists for Gate C, starting video.');
+					navigator.mediaDevices.getUserMedia({video: true}).then(
+						stream => { room.videoChat(stream).addListener('update', processAv); }
+					).catch(
+						error => { console.log(error); }
+					);
+				} else {
+					console.log(TAG, 'Requesting room with Gate C.');
+					requestedRoom[gate_c.cID] = true;
+					gate_c.chat();
+				}
+			} else
+				console.log(TAG, 'Gate C offline?');
+		}
+	);
+
+
+	IPCortex.PBX.Auth.setHost('https://fac1.ipcortex.net');
+	IPCortex.PBX.Auth.login().then(
+		function() {
+			console.log(TAG, 'Logged in.');
+			return IPCortex.PBX.startFeed();
+		}
+	).then(
+		function() {
+			console.log(TAG, 'Feed started.');
+			gate_b = IPCortex.PBX.contacts.find(contact => { return contact.uname === 'gate-b' });
+			gate_c = IPCortex.PBX.contacts.find(contact => { return contact.uname === 'gate-c' });
+			/* Needed for the negotiation transport layer for AV */
+			IPCortex.PBX.enableChat(
+				function(room) {
+					console.log(TAG, 'New Room received.', room);
+					room.addListener('update', processRoom);
+					processRoom(room);
+				}
+			);
+			IPCortex.PBX.enableFeature(
+				'av',
+				function(av) {
+					console.log(TAG, 'New AV received.', av);
+					av.addListener('update', processFeed);
+					processFeed(av)
+				},
+				['chat']
+			);
+			openBtn.disabled = false;
+		}
+	).catch(
+		function(e) {
+			console.log(TAG, e);
+		}
+	);
+</script>
+</body>
+</html>
